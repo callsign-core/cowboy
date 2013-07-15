@@ -91,14 +91,23 @@ websocket_upgrade(State, Req) ->
 	%% @todo Should probably send a 426 if the Upgrade header is missing.
 	{ok, [<<"websocket">>], Req3}
 		= cowboy_req:parse_header(<<"upgrade">>, Req2),
-	{Version, Req4} = cowboy_req:header(<<"sec-websocket-version">>, Req3),
-	IntVersion = list_to_integer(binary_to_list(Version)),
-	true = (IntVersion =:= 7) orelse (IntVersion =:= 8)
-		orelse (IntVersion =:= 13),
-	{Key, Req5} = cowboy_req:header(<<"sec-websocket-key">>, Req4),
-	false = Key =:= undefined,
-	websocket_extensions(State#state{key=Key},
-		cowboy_req:set_meta(websocket_version, IntVersion, Req5)).
+
+	case cowboy_req:header(<<"sec-websocket-key1">>, Req3) of
+		{Key1, Req4}->
+			{Key2, Req5} = cowboy_req:header(<<"sec-websocket-key2">>, Req4),
+			error_logger:error_msg("Key1 : ~p Key2 : ~p~n",[Key1, Key2]),
+			websocket_extensions(State#state{key=Key2},
+					cowboy_req:set_meta(websocket_version, 3, Req5));
+		_->
+			{Version, Req4} = cowboy_req:header(<<"sec-websocket-version">>, Req3),
+			IntVersion = list_to_integer(binary_to_list(Version)),
+			true = (IntVersion =:= 7) orelse (IntVersion =:= 8)
+				orelse (IntVersion =:= 13),
+			{Key, Req5} = cowboy_req:header(<<"sec-websocket-key">>, Req4),
+			false = Key =:= undefined,
+			websocket_extensions(State#state{key=Key},
+				cowboy_req:set_meta(websocket_version, IntVersion, Req5))
+	end.
 
 -spec websocket_extensions(#state{}, Req)
 	-> {ok, #state{}, Req} when Req::cowboy_req:req().
