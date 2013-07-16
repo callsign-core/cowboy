@@ -100,7 +100,7 @@
 -export([chunked_reply/2]).
 -export([chunked_reply/3]).
 -export([chunk/2]).
--export([upgrade_reply/3]).
+-export([upgrade_reply/4]).
 -export([ensure_response/2]).
 
 %% Private setter/getter API.
@@ -1110,14 +1110,14 @@ last_chunk(Req=#http_req{socket=Socket, transport=Transport}) ->
 
 %% @doc Send an upgrade reply.
 %% @private
--spec upgrade_reply(cowboy:http_status(), cowboy:http_headers(), Req)
-	-> {ok, Req} when Req::req().
-upgrade_reply(Status, Headers, Req=#http_req{transport=Transport,
+-spec upgrade_reply(cowboy:http_status(), cowboy:http_headers(), Body, Req)
+	-> {ok, Req} when Body::binary(), Req::req().
+upgrade_reply(Status, Headers, Body, Req=#http_req{transport=Transport,
 		resp_state=waiting, resp_headers=RespHeaders})
 		when Transport =/= cowboy_spdy ->
 	{_, Req2} = response(Status, Headers, RespHeaders, [
 		{<<"connection">>, <<"Upgrade">>}
-	], <<>>, Req),
+	], Body, Req),
 	{ok, Req2#http_req{resp_state=done, resp_headers=[], resp_body= <<>>}}.
 
 %% @doc Ensure the response has been sent fully.

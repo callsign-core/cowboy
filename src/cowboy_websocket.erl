@@ -50,6 +50,7 @@
 	handler :: module(),
 	handler_opts :: any(),
 	key = undefined :: undefined | binary(),
+	version = undefined :: undefined | integer(),
 	timeout = infinity :: timeout(),
 	timeout_ref = undefined :: undefined | reference(),
 	messages = undefined :: undefined | {atom(), atom(), atom()},
@@ -93,12 +94,7 @@ websocket_upgrade(State, Req) ->
 		= cowboy_req:parse_header(<<"upgrade">>, Req2),
 
 	case cowboy_req:header(<<"sec-websocket-key1">>, Req3) of
-		{Key1, Req4}->
-			{Key2, Req5} = cowboy_req:header(<<"sec-websocket-key2">>, Req4),
-			error_logger:error_msg("Key1 : ~p Key2 : ~p~n",[Key1, Key2]),
-			websocket_extensions(State#state{key=Key2},
-					cowboy_req:set_meta(websocket_version, 3, Req5));
-		_->
+		{undefined, Req4}->
 			{Version, Req4} = cowboy_req:header(<<"sec-websocket-version">>, Req3),
 			IntVersion = list_to_integer(binary_to_list(Version)),
 			true = (IntVersion =:= 7) orelse (IntVersion =:= 8)
@@ -106,7 +102,11 @@ websocket_upgrade(State, Req) ->
 			{Key, Req5} = cowboy_req:header(<<"sec-websocket-key">>, Req4),
 			false = Key =:= undefined,
 			websocket_extensions(State#state{key=Key},
-				cowboy_req:set_meta(websocket_version, IntVersion, Req5))
+				cowboy_req:set_meta(websocket_version, IntVersion, Req5));
+		{Key1, Req4}->
+			false = Key1 =:= undefined,
+			websocket_extensions(State#state{key=Key1, version=0},
+					cowboy_req:set_meta(websocket_version, 0, Req4))
 	end.
 
 -spec websocket_extensions(#state{}, Req)
@@ -187,8 +187,51 @@ upgrade_error(Req, Env) ->
 	| {suspend, module(), atom(), [any()]}
 	when Req::cowboy_req:req().
 websocket_handshake(State=#state{
+			transport=Transport, key=Key, version=Version},
+		Req, HandlerState) when Version =:= 0 ->
+	{Key2, _} = cowboy_req:header(<<"sec-websocket-key2">>, Req),
+	{Origin, _} = cowboy_req:header(<<"origin">>, Req),
+	{Host, _} = cowboy_req:host(Req),
+	{Path, _} = cowboy_req:path(Req),
+	error_logger:info_msg("Host : ~p  Path : ~p~n",[Host, Path]),
+	Location = <<"ws://",Host/binary, Path/binary>>,
+
+	Key1List = erlang:binary_to_list(Key),
+	Key2List = erlang:binary_to_list(Key2),
+	IKey1 = [ D || D <-Key1List, $0 =< D, D =< $9 ],
+	IKey2 = [ D || D <-Key2List, $0 =< D, D =< $9 ],
+	Blank1 = length([D || D <-Key1List, D=:= 32]),
+	Blank2 = length([D || D <-Key2List, D=:= 32]),
+	Part1 = erlang:list_to_integer(IKey1) div Blank1,
+	Part2 = erlang:list_to_integer(IKey2) div Blank2,
+
+	{done, Req2} = cowboy_req:stream_body(Req),
+	Body = cowboy_req:get(buffer, Req2),
+	%% FIXME io:format("body : ~p~n",[Body]),
+
+	CKey = <<Part1:4/big-unsigned-integer-unit:8,
+			  Part2:4/big-unsigned-integer-unit:8,
+			  Body/binary>>,
+	Challenge = erlang:md5(CKey),
+	%% FIXME io:format("Challenge : ~p~n",[Challenge]),
+
+	{ok, Req3} = cowboy_req:upgrade_reply(
+		101,
+		[{<<"Upgrade">>, <<"WebSocket">>},
+		 {<<"Sec-WebSocket-Origin">>, Origin},
+		 {<<"Sec-WebSocket-Location">>, Location}],
+		 Challenge, 
+		Req2),
+	%% Flush the resp_sent message before moving on.
+	receive {cowboy_req, resp_sent} -> ok after 0 -> ok end,
+	State2 = handler_loop_timeout(State),
+	handler_before_loop(State2#state{key=undefined,
+		messages=Transport:messages()}, Req3, HandlerState, <<>>);
+
+websocket_handshake(State=#state{
 			transport=Transport, key=Key, deflate_frame=DeflateFrame},
 		Req, HandlerState) ->
+
 	%% @todo Change into crypto:hash/2 for R17B+ or when supporting only R16B+.
 	Challenge = base64:encode(crypto:sha(
 		<< Key/binary, "258EAFA5-E914-47DA-95CA-C5AB0DC85B11" >>)),
@@ -201,6 +244,7 @@ websocket_handshake(State=#state{
 		[{<<"upgrade">>, <<"websocket">>},
 		 {<<"sec-websocket-accept">>, Challenge}|
 		 Extensions],
+		 <<>>,
 		Req),
 	%% Flush the resp_sent message before moving on.
 	receive {cowboy_req, resp_sent} -> ok after 0 -> ok end,
@@ -241,18 +285,24 @@ handler_loop(State=#state{socket=Socket, messages={OK, Closed, Error},
 		timeout_ref=TRef}, Req, HandlerState, SoFar) ->
 	receive
 		{OK, Socket, Data} ->
+			%% FIXME io:format("handler_loop : ~p Data : ~p~n",[OK, Data]),
 			State2 = handler_loop_timeout(State),
 			websocket_data(State2, Req, HandlerState,
 				<< SoFar/binary, Data/binary >>);
 		{Closed, Socket} ->
+			%% FIXME io:format("Closed : ~p~n",[Closed]),
 			handler_terminate(State, Req, HandlerState, {error, closed});
 		{Error, Socket, Reason} ->
+			%% FIXME io:format("Error: ~p  Reason~p~n",[Error, Reason]),
 			handler_terminate(State, Req, HandlerState, {error, Reason});
 		{timeout, TRef, ?MODULE} ->
+			%% FIXME io:format("timeout : ~p~n",[TRef]),
 			websocket_close(State, Req, HandlerState, {normal, timeout});
 		{timeout, OlderTRef, ?MODULE} when is_reference(OlderTRef) ->
+			%% FIXME io:format("timeout : ~p~n",[OlderTRef]),
 			handler_loop(State, Req, HandlerState, SoFar);
 		Message ->
+			%% FIXME io:format("handler_loop -> Message: ~p~n",[Message]),
 			handler_call(State, Req, HandlerState,
 				SoFar, websocket_info, Message, fun handler_before_loop/4)
 	end.
@@ -264,6 +314,35 @@ handler_loop(State=#state{socket=Socket, messages={OK, Closed, Error},
 	-> {ok, Req, cowboy_middleware:env()}
 	| {suspend, module(), atom(), [any()]}
 	when Req::cowboy_req:req().
+
+websocket_data(State, Req, HandlerState, <<0, Data/binary>>)
+		when State#state.version =:= 0 ->
+	io:format("binary:last(Data) : ~p~n",[binary:last(Data)]),
+	case binary:last(Data) of
+		16#FF ->
+			Data2 = binary:part(Data, 0, byte_size(Data) - 1),
+			%% FIXME io:format("~p~n~p~n~p~n",[Data2, HandlerState, Req]),
+			case is_utf8(<<Data2/binary>>) of
+				<<>> ->
+					websocket_dispatch(State#state{utf8_state= <<>>},
+						Req, HandlerState, <<>>, websocket_opcode(text),
+						<<Data2/binary>>);
+				_ ->
+					websocket_close(State, Req, HandlerState, {error, badencoding})
+			end;
+		_->
+			websocket_close(State, Req, HandlerState, {error, badframe})
+	end;
+	
+websocket_data(State, Req, HandlerState, <<255, 0>>)
+		when State#state.version =:= 0 ->
+	websocket_close(State, Req, HandlerState, {remote, closed});
+
+websocket_data(State, Req, HandlerState, <<255, Data/binary>>)
+		when State#state.version =:= 0 ->
+	%% FIXME
+	io:format("~p~n~p~n~p~n",[Data, HandlerState, Req]);
+
 %% RSV bits MUST be 0 unless an extension is negotiated
 %% that defines meanings for non-zero values.
 websocket_data(State, Req, HandlerState, << _:1, Rsv:3, _/bits >>)
@@ -535,6 +614,7 @@ websocket_payload_loop(State=#state{socket=Socket, transport=Transport,
 	Transport:setopts(Socket, [{active, once}]),
 	receive
 		{OK, Socket, Data} ->
+			%% FIXME io:format("websocket_payload_loop : ~p~n",[Data]),
 			State2 = handler_loop_timeout(State),
 			websocket_payload(State2, Req, HandlerState,
 				Opcode, Len, MaskKey, Unmasked, Data, Rsv);
@@ -548,6 +628,7 @@ websocket_payload_loop(State=#state{socket=Socket, transport=Transport,
 			websocket_payload_loop(State, Req, HandlerState,
 				Opcode, Len, MaskKey, Unmasked, Rsv);
 		Message ->
+			%% FIXME io:format("websocket_payload_loop -> Message : ~p~n",[Message]),
 			handler_call(State, Req, HandlerState,
 				<<>>, websocket_info, Message,
 				fun (State2, Req2, HandlerState2, _) ->
@@ -604,8 +685,10 @@ handler_call(State=#state{handler=Handler, handler_opts=HandlerOpts}, Req,
 		HandlerState, RemainingData, Callback, Message, NextState) ->
 	try Handler:Callback(Message, Req, HandlerState) of
 		{ok, Req2, HandlerState2} ->
+			%% FIXME io:format("NextState : ~p HandlerState2 : ~p RemainingData : ~p~n",[NextState, HandlerState2, RemainingData]),
 			NextState(State, Req2, HandlerState2, RemainingData);
 		{ok, Req2, HandlerState2, hibernate} ->
+			%% FIXME io:format("hibernate NextState : ~p HandlerState2 : ~p RemainingData : ~p~n",[NextState, HandlerState2, RemainingData]),
 			NextState(State#state{hibernate=true},
 				Req2, HandlerState2, RemainingData);
 		{reply, Payload, Req2, HandlerState2}
@@ -713,6 +796,10 @@ websocket_send({Type = close, StatusCode, Payload}, State=#state{
 	Transport:send(Socket,
 		[<< 1:1, 0:3, Opcode:4, 0:1, BinLen/bits, StatusCode:16 >>, Payload]),
 	{shutdown, State};
+websocket_send({_Type, Payload0}, State=#state{socket=Socket, transport=Transport})
+   when State#state.version =:= 0 ->
+	Payload = iolist_to_binary(Payload0),
+	{Transport:send(Socket, [<<16#00>>, Payload, <<16#FF>>]), State};
 websocket_send({Type, Payload0}, State=#state{socket=Socket, transport=Transport}) ->
 	Opcode = websocket_opcode(Type),
 	{Payload, Rsv, State2} = websocket_deflate_frame(Opcode, iolist_to_binary(Payload0), State),
