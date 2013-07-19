@@ -285,7 +285,7 @@ handler_loop(State=#state{socket=Socket, messages={OK, Closed, Error},
 		timeout_ref=TRef}, Req, HandlerState, SoFar) ->
 	receive
 		{OK, Socket, Data} ->
-			%% FIXME io:format("handler_loop : ~p Data : ~p~n",[OK, Data]),
+			%% FIXME io:format("handler_loop : ~p Data : ~p SoFar :~p~n",[OK, Data, SoFar]),
 			State2 = handler_loop_timeout(State),
 			websocket_data(State2, Req, HandlerState,
 				<< SoFar/binary, Data/binary >>);
@@ -307,6 +307,15 @@ handler_loop(State=#state{socket=Socket, messages={OK, Closed, Error},
 				SoFar, websocket_info, Message, fun handler_before_loop/4)
 	end.
 
+find_frame_end(<<>>, <<>>)->
+	{not_found_frame_end};
+find_frame_end(<<>>, Data)->
+	{ok, Data, <<>>};
+find_frame_end(<<255, Rest/binary>>, Data)->
+	{ok, Data, Rest};
+find_frame_end(<<H, Rest/binary>>, Data)->
+	find_frame_end(Rest, <<Data/binary, H>>).
+
 %% All frames passing through this function are considered valid,
 %% with the only exception of text and close frames with a payload
 %% which may still contain errors.
@@ -317,20 +326,18 @@ handler_loop(State=#state{socket=Socket, messages={OK, Closed, Error},
 
 websocket_data(State, Req, HandlerState, <<0, Data/binary>>)
 		when State#state.version =:= 0 ->
-	io:format("binary:last(Data) : ~p~n",[binary:last(Data)]),
-	case binary:last(Data) of
-		16#FF ->
-			Data2 = binary:part(Data, 0, byte_size(Data) - 1),
-			%% FIXME io:format("~p~n~p~n~p~n",[Data2, HandlerState, Req]),
+	case find_frame_end(Data, <<>>) of
+		{ok, Data2, Rest} ->
 			case is_utf8(<<Data2/binary>>) of
+				false ->
+					websocket_close(State, Req, HandlerState, {error, badencoding});
 				<<>> ->
 					websocket_dispatch(State#state{utf8_state= <<>>},
-						Req, HandlerState, <<>>, websocket_opcode(text),
-						<<Data2/binary>>);
-				_ ->
-					websocket_close(State, Req, HandlerState, {error, badencoding})
+						Req, HandlerState, Rest, websocket_opcode(text),
+						<<Data2/binary>>)
 			end;
-		_->
+		_Error->
+			error_logger:error_msg("~p~n", [_Error]),
 			websocket_close(State, Req, HandlerState, {error, badframe})
 	end;
 	
@@ -340,8 +347,7 @@ websocket_data(State, Req, HandlerState, <<255, 0>>)
 
 websocket_data(State, Req, HandlerState, <<255, Data/binary>>)
 		when State#state.version =:= 0 ->
-	%% FIXME
-	io:format("~p~n~p~n~p~n",[Data, HandlerState, Req]);
+	websocket_close(State, Req, HandlerState, {error, badframe})
 
 %% RSV bits MUST be 0 unless an extension is negotiated
 %% that defines meanings for non-zero values.
@@ -600,7 +606,7 @@ is_utf8(Incomplete = << 2#11110:5, _:3, 2#10:2, _:6 >>) ->
 is_utf8(Incomplete = << 2#11110:5, _:3, 2#10:2, _:6, 2#10:2, _:6 >>) ->
 	Incomplete;
 %% Invalid.
-is_utf8(_) ->
+is_utf8(_Invalid) ->
 	false.
 
 -spec websocket_payload_loop(#state{}, Req, any(),
@@ -619,12 +625,16 @@ websocket_payload_loop(State=#state{socket=Socket, transport=Transport,
 			websocket_payload(State2, Req, HandlerState,
 				Opcode, Len, MaskKey, Unmasked, Data, Rsv);
 		{Closed, Socket} ->
+			%% FIXME io:format("websocket_payload_loop : ~p~n",[Closed]),
 			handler_terminate(State, Req, HandlerState, {error, closed});
 		{Error, Socket, Reason} ->
+			%% FIXME io:format("websocket_payload_loop : ~p ~p~n",[Error, Reason]),
 			handler_terminate(State, Req, HandlerState, {error, Reason});
 		{timeout, TRef, ?MODULE} ->
+			%% FIXME io:format("websocket_payload_loop : timeout ~p~n",[TRef]),
 			websocket_close(State, Req, HandlerState, {normal, timeout});
 		{timeout, OlderTRef, ?MODULE} when is_reference(OlderTRef) ->
+		   	io:format("websocket_payload_loop : timeout ~p~n",[OlderTRef]),
 			websocket_payload_loop(State, Req, HandlerState,
 				Opcode, Len, MaskKey, Unmasked, Rsv);
 		Message ->
@@ -829,6 +839,26 @@ websocket_send_many([Frame|Tail], State) ->
 	{atom(), atom()} | {remote, close_code(), binary()})
 	-> {ok, Req, cowboy_middleware:env()}
 	when Req::cowboy_req:req().
+websocket_close(State=#state{socket=Socket, transport=Transport},
+		Req, HandlerState, Reason) when State#state.version =:= 0 ->
+	error_logger:error_msg("** websocket_close : ~p~n", [Reason]),	
+	%% @todo
+	case Reason of
+		{normal, _}->
+			Transport:send(Socket, <<255,0>>);
+		{error, badframe}->
+			Transport:send(Socket, <<255,0>>);
+		{error, badencoding}->
+			Transport:send(Socket, <<255,0>>);
+		{error, handler}->
+			Transport:send(Socket, <<255,0>>);
+		{remote, closed}->
+			Transport:send(Socket, <<255,0>>);
+		{remote, _Code, _} ->
+			Transport:send(Socket, <<255,0>>)
+	end,
+	handler_terminate(State, Req, HandlerState, Reason);
+
 websocket_close(State=#state{socket=Socket, transport=Transport},
 		Req, HandlerState, Reason) ->
 	case Reason of
