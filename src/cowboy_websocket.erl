@@ -345,9 +345,9 @@ websocket_data(State, Req, HandlerState, <<255, 0>>)
 		when State#state.version =:= 0 ->
 	websocket_close(State, Req, HandlerState, {remote, closed});
 
-websocket_data(State, Req, HandlerState, <<255, Data/binary>>)
+websocket_data(State, Req, HandlerState, <<255, _Data/binary>>)
 		when State#state.version =:= 0 ->
-	websocket_close(State, Req, HandlerState, {error, badframe})
+	websocket_close(State, Req, HandlerState, {error, badframe});
 
 %% RSV bits MUST be 0 unless an extension is negotiated
 %% that defines meanings for non-zero values.
