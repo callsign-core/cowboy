@@ -977,7 +977,7 @@ upgrade_reply(Status, Headers, Req=#http_req{transport=Transport,
 		when Transport =/= cowboy_spdy ->
 	{_, Req2} = response(Status, Headers, RespHeaders, [
 		{<<"connection">>, <<"Upgrade">>}
-	], Body, Req),
+	], <<>>, Req),
 	{ok, Req2#http_req{resp_state=done, resp_headers=[], resp_body= <<>>}}.
 
 -spec continue(req()) -> ok | {error, atom()}.
