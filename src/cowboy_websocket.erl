@@ -1,4 +1,4 @@
-%% Copyright (c) 2011-2013, Loïc Hoguin <essen@ninenines.eu>
+%% Copyright (c) 2011-2014, Loïc Hoguin <essen@ninenines.eu>
 %%
 %% Permission to use, copy, modify, and/or distribute this software for any
 %% purpose with or without fee is hereby granted, provided that the above
@@ -12,21 +12,12 @@
 %% ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 %% OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-%% @doc Websocket protocol implementation.
-%%
 %% Cowboy supports versions 7 through 17 of the Websocket drafts.
 %% It also supports RFC6455, the proposed standard for Websocket.
 -module(cowboy_websocket).
 -behaviour(cowboy_sub_protocol).
 
-%% Ignore the deprecation warning for crypto:sha/1.
-%% @todo Remove when we support only R16B+.
--compile(nowarn_deprecated_function).
-
-%% API.
 -export([upgrade/4]).
-
-%% Internal.
 -export([handler_loop/4]).
 
 -type close_code() :: 1000..4999.
@@ -42,6 +33,8 @@
 -type frag_state() :: undefined
 	| {nofin, opcode(), binary()} | {fin, opcode(), binary()}.
 -type rsv() :: << _:3 >>.
+-type terminate_reason() :: {normal | error | remote, atom()}
+	| {remote, close_code(), binary()}.
 
 -record(state, {
 	env :: cowboy_middleware:env(),
@@ -61,13 +54,8 @@
 	deflate_state :: undefined | port()
 }).
 
-%% @doc Upgrade an HTTP request to the Websocket protocol.
-%%
-%% You do not need to call this function manually. To upgrade to the Websocket
-%% protocol, you simply need to return <em>{upgrade, protocol, {@module}}</em>
-%% in your <em>cowboy_http_handler:init/3</em> handler function.
 -spec upgrade(Req, Env, module(), any())
-	-> {ok, Req, Env} | {error, 400, Req}
+	-> {ok, Req, Env}
 	| {suspend, module(), atom(), [any()]}
 	when Req::cowboy_req:req(), Env::cowboy_middleware:env().
 upgrade(Req, Env, Handler, HandlerOpts) ->
@@ -80,8 +68,12 @@ upgrade(Req, Env, Handler, HandlerOpts) ->
 		{ok, State2, Req2} ->
 			handler_init(State2, Req2, HandlerOpts)
 	catch _:_ ->
-		cowboy_req:maybe_reply(400, Req),
-		exit(normal)
+		receive
+			{cowboy_req, resp_sent} -> ok
+		after 0 ->
+			_ = cowboy_req:reply(400, Req),
+			exit(normal)
+		end
 	end.
 
 -spec websocket_upgrade(#state{}, Req)
@@ -141,8 +133,7 @@ websocket_extensions(State, Req) ->
 	end.
 
 -spec handler_init(#state{}, Req, any())
-	-> {ok, Req, cowboy_middleware:env()} | {error, 400, Req}
-	| {suspend, module(), atom(), [any()]}
+	-> {ok, Req, cowboy_middleware:env()} | {suspend, module(), atom(), [any()]}
 	when Req::cowboy_req:req().
 handler_init(State=#state{env=Env, transport=Transport,
 		handler=Handler}, Req, HandlerOpts) ->
@@ -162,11 +153,12 @@ handler_init(State=#state{env=Env, transport=Transport,
 			cowboy_req:ensure_response(Req2, 400),
 			{ok, Req2, [{result, closed}|Env]}
 	catch Class:Reason ->
-		cowboy_req:maybe_reply(400, Req),
+		Stacktrace = erlang:get_stacktrace(),
+		cowboy_req:maybe_reply(Stacktrace, Req),
 		erlang:Class([
 			{reason, Reason},
 			{mfa, {Handler, websocket_init, 3}},
-			{stacktrace, erlang:get_stacktrace()},
+			{stacktrace, Stacktrace},
 			{req, cowboy_req:to_list(Req)},
 			{opts, HandlerOpts}
 		])
@@ -221,9 +213,7 @@ websocket_handshake(State=#state{
 websocket_handshake(State=#state{
 			transport=Transport, key=Key, deflate_frame=DeflateFrame},
 		Req, HandlerState) ->
-
-	%% @todo Change into crypto:hash/2 for R17B+ or when supporting only R16B+.
-	Challenge = base64:encode(crypto:sha(
+	Challenge = base64:encode(crypto:hash(sha,
 		<< Key/binary, "258EAFA5-E914-47DA-95CA-C5AB0DC85B11" >>)),
 	Extensions = case DeflateFrame of
 		false -> [];
@@ -266,7 +256,6 @@ handler_loop_timeout(State=#state{timeout=Timeout, timeout_ref=PrevRef}) ->
 	TRef = erlang:start_timer(Timeout, self(), ?MODULE),
 	State#state{timeout_ref=TRef}.
 
-%% @private
 -spec handler_loop(#state{}, Req, any(), binary())
 	-> {ok, Req, cowboy_middleware:env()}
 	| {suspend, module(), atom(), [any()]}
@@ -836,8 +825,7 @@ websocket_send_many([Frame|Tail], State) ->
 		{Error, State2} -> {Error, State2}
 	end.
 
--spec websocket_close(#state{}, Req, any(),
-	{atom(), atom()} | {remote, close_code(), binary()})
+-spec websocket_close(#state{}, Req, any(), terminate_reason())
 	-> {ok, Req, cowboy_middleware:env()}
 	when Req::cowboy_req:req().
 websocket_close(State=#state{socket=Socket, transport=Transport},
@@ -878,7 +866,7 @@ websocket_close(State=#state{socket=Socket, transport=Transport},
 	end,
 	handler_terminate(State, Req, HandlerState, Reason).
 
--spec handler_terminate(#state{}, Req, any(), atom() | {atom(), atom()})
+-spec handler_terminate(#state{}, Req, any(), terminate_reason())
 	-> {ok, Req, cowboy_middleware:env()}
 	when Req::cowboy_req:req().
 handler_terminate(#state{env=Env, handler=Handler},

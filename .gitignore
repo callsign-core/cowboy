@@ -1,12 +1,10 @@
 .cowboy.plt
 .erlang.mk.packages.*
-.eunit
 _rel
 deps
-doc/*.css
-doc/*.html
-doc/*.png
-doc/edoc-info
+doc/man3
+doc/man7
+doc/markdown
 ebin
 logs
 relx
