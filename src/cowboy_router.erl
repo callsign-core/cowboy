@@ -164,18 +164,22 @@ compile_brackets_split(<< C, Rest/binary >>, Acc, N) ->
 	-> {ok, Req, Env} | {error, 400 | 404, Req}
 	when Req::cowboy_req:req(), Env::cowboy_middleware:env().
 execute(Req, Env) ->
-	{_, Dispatch} = lists:keyfind(dispatch, 1, Env),
-	[Host, Path] = cowboy_req:get([host, path], Req),
-	case match(Dispatch, Host, Path) of
-		{ok, Handler, HandlerOpts, Bindings, HostInfo, PathInfo} ->
-			Req2 = cowboy_req:set_bindings(HostInfo, PathInfo, Bindings, Req),
-			{ok, Req2, [{handler, Handler}, {handler_opts, HandlerOpts}|Env]};
-		{error, notfound, host} ->
-			{error, 400, Req};
-		{error, badrequest, path} ->
-			{error, 400, Req};
-		{error, notfound, path} ->
-			{error, 404, Req}
+	case lists:keyfind(dispatch, 1, Env) of
+		false ->
+				{error, 400, Req};
+		{_, Dispatch}-> 
+			[Host, Path] = cowboy_req:get([host, path], Req),
+			case match(Dispatch, Host, Path) of
+				{ok, Handler, HandlerOpts, Bindings, HostInfo, PathInfo} ->
+					Req2 = cowboy_req:set_bindings(HostInfo, PathInfo, Bindings, Req),
+					{ok, Req2, [{handler, Handler}, {handler_opts, HandlerOpts}|Env]};
+				{error, notfound, host} ->
+					{error, 400, Req};
+				{error, badrequest, path} ->
+					{error, 400, Req};
+				{error, notfound, path} ->
+					{error, 404, Req}
+			end
 	end.
 
 %% Internal.
