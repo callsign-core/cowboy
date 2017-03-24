@@ -202,7 +202,7 @@ websocket_handshake(State=#state{
 		[{<<"Upgrade">>, <<"WebSocket">>},
 		 {<<"Sec-WebSocket-Origin">>, Origin},
 		 {<<"Sec-WebSocket-Location">>, Location}],
-		 Challenge, 
+		 %Challenge, 
 		Req2),
 	%% Flush the resp_sent message before moving on.
 	receive {cowboy_req, resp_sent} -> ok after 0 -> ok end,
@@ -224,7 +224,7 @@ websocket_handshake(State=#state{
 		[{<<"upgrade">>, <<"websocket">>},
 		 {<<"sec-websocket-accept">>, Challenge}|
 		 Extensions],
-		 <<>>,
+		 %<<>>,
 		Req),
 	%% Flush the resp_sent message before moving on.
 	receive {cowboy_req, resp_sent} -> ok after 0 -> ok end,
