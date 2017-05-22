@@ -76,6 +76,7 @@
 -export([chunked_reply/3]).
 -export([chunk/2]).
 -export([upgrade_reply/3]).
+-export([upgrade_reply/4]).
 -export([continue/1]).
 -export([maybe_reply/2]).
 -export([ensure_response/2]).
@@ -980,6 +981,16 @@ upgrade_reply(Status, Headers, Req=#http_req{transport=Transport,
 	{_, Req2} = response(Status, Headers, RespHeaders, [
 		{<<"connection">>, <<"Upgrade">>}
 	], <<>>, Req),
+	{ok, Req2#http_req{resp_state=done, resp_headers=[], resp_body= <<>>}}.
+
+-spec upgrade_reply(cowboy:http_status(), cowboy:http_headers(), Body, Req)
+	-> {ok, Req} when Body::binary(), Req::req().
+upgrade_reply(Status, Headers, Body, Req=#http_req{transport=Transport,
+		resp_state=waiting, resp_headers=RespHeaders})
+		when Transport =/= cowboy_spdy ->
+	{_, Req2} = response(Status, Headers, RespHeaders, [
+		{<<"connection">>, <<"Upgrade">>}
+	], Body, Req),
 	{ok, Req2#http_req{resp_state=done, resp_headers=[], resp_body= <<>>}}.
 
 -spec continue(req()) -> ok | {error, atom()}.

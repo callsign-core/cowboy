@@ -187,23 +187,19 @@ websocket_handshake(State=#state{
 	Part1 = erlang:list_to_integer(IKey1) div Blank1,
 	Part2 = erlang:list_to_integer(IKey2) div Blank2,
 
-	{done, Req2} = cowboy_req:stream_body(Req),
-	Body = cowboy_req:get(buffer, Req2),
-	%% FIXME io:format("body : ~p~n",[Body]),
-
+	Body = cowboy_req:get(buffer, Req),
 	CKey = <<Part1:4/big-unsigned-integer-unit:8,
 			  Part2:4/big-unsigned-integer-unit:8,
 			  Body/binary>>,
 	Challenge = erlang:md5(CKey),
-	%% FIXME io:format("Challenge : ~p~n",[Challenge]),
 
 	{ok, Req3} = cowboy_req:upgrade_reply(
 		101,
 		[{<<"Upgrade">>, <<"WebSocket">>},
 		 {<<"Sec-WebSocket-Origin">>, Origin},
 		 {<<"Sec-WebSocket-Location">>, Location}],
-		 %Challenge, 
-		Req2),
+		 Challenge, 
+		Req),
 	%% Flush the resp_sent message before moving on.
 	receive {cowboy_req, resp_sent} -> ok after 0 -> ok end,
 	State2 = handler_loop_timeout(State),
@@ -264,24 +260,30 @@ handler_loop(State=#state{socket=Socket, messages={OK, Closed, Error},
 		timeout_ref=TRef}, Req, HandlerState, SoFar) ->
 	receive
 		{OK, Socket, Data} ->
-			%% FIXME io:format("handler_loop : ~p Data : ~p SoFar :~p~n",[OK, Data, SoFar]),
+			%% FIXME 
+			%io:format("handler_loop : ~p Data : ~p SoFar :~p~n",[OK, Data, SoFar]),
 			State2 = handler_loop_timeout(State),
 			websocket_data(State2, Req, HandlerState,
 				<< SoFar/binary, Data/binary >>);
 		{Closed, Socket} ->
-			%% FIXME io:format("Closed : ~p~n",[Closed]),
+			%% FIXME 
+			%io:format("Closed : ~p~n",[Closed]),
 			handler_terminate(State, Req, HandlerState, {error, closed});
 		{Error, Socket, Reason} ->
-			%% FIXME io:format("Error: ~p  Reason~p~n",[Error, Reason]),
+			%% FIXME 
+			%io:format("Error: ~p  Reason~p~n",[Error, Reason]),
 			handler_terminate(State, Req, HandlerState, {error, Reason});
 		{timeout, TRef, ?MODULE} ->
-			%% FIXME io:format("timeout : ~p~n",[TRef]),
+			%% FIXME 
+			%io:format("timeout : ~p~n",[TRef]),
 			websocket_close(State, Req, HandlerState, {normal, timeout});
 		{timeout, OlderTRef, ?MODULE} when is_reference(OlderTRef) ->
-			%% FIXME io:format("timeout : ~p~n",[OlderTRef]),
+			%% FIXME 
+			%io:format("timeout : ~p~n",[OlderTRef]),
 			handler_loop(State, Req, HandlerState, SoFar);
 		Message ->
-			%% FIXME io:format("handler_loop -> Message: ~p~n",[Message]),
+			%% FIXME 
+			%io:format("handler_loop -> Message: ~p~n",[Message]),
 			handler_call(State, Req, HandlerState,
 				SoFar, websocket_info, Message, fun handler_before_loop/4)
 	end.
@@ -611,25 +613,30 @@ websocket_payload_loop(State=#state{socket=Socket, transport=Transport,
 	Transport:setopts(Socket, [{active, once}]),
 	receive
 		{OK, Socket, Data} ->
-			%% FIXME io:format("websocket_payload_loop : ~p~n",[Data]),
+			%% FIXME 
+			%io:format("websocket_payload_loop : ~p~n",[Data]),
 			State2 = handler_loop_timeout(State),
 			websocket_payload(State2, Req, HandlerState,
 				Opcode, Len, MaskKey, Unmasked, UnmaskedLen, Data, Rsv);
 		{Closed, Socket} ->
-			%% FIXME io:format("websocket_payload_loop : ~p~n",[Closed]),
+			%% FIXME 
+			%io:format("websocket_payload_loop : ~p~n",[Closed]),
 			handler_terminate(State, Req, HandlerState, {error, closed});
 		{Error, Socket, Reason} ->
-			%% FIXME io:format("websocket_payload_loop : ~p ~p~n",[Error, Reason]),
+			%% FIXME 
+			%io:format("websocket_payload_loop : ~p ~p~n",[Error, Reason]),
 			handler_terminate(State, Req, HandlerState, {error, Reason});
 		{timeout, TRef, ?MODULE} ->
-			%% FIXME io:format("websocket_payload_loop : timeout ~p~n",[TRef]),
+			%% FIXME 
+			%io:format("websocket_payload_loop : timeout ~p~n",[TRef]),
 			websocket_close(State, Req, HandlerState, {normal, timeout});
 		{timeout, OlderTRef, ?MODULE} when is_reference(OlderTRef) ->
-		   	io:format("websocket_payload_loop : timeout ~p~n",[OlderTRef]),
+		  %io:format("websocket_payload_loop : timeout ~p~n",[OlderTRef]),
 			websocket_payload_loop(State, Req, HandlerState,
 				Opcode, Len, MaskKey, Unmasked, UnmaskedLen, Rsv);
 		Message ->
-			%% FIXME io:format("websocket_payload_loop -> Message : ~p~n",[Message]),
+			%% FIXME 
+			%io:format("websocket_payload_loop -> Message : ~p~n",[Message]),
 			handler_call(State, Req, HandlerState,
 				<<>>, websocket_info, Message,
 				fun (State2, Req2, HandlerState2, _) ->
@@ -684,14 +691,19 @@ websocket_dispatch(State, Req, HandlerState, RemainingData, 10, Payload) ->
 	when Req::cowboy_req:req().
 handler_call(State=#state{handler=Handler}, Req, HandlerState,
 		RemainingData, Callback, Message, NextState) ->
+	%io:format("Handler : ~p, Callback : ~p, Message : ~p~n", [Handler, Callback, Message]),
+
 	try Handler:Callback(Message, Req, HandlerState) of
 		{ok, Req2, HandlerState2} ->
-			%% FIXME io:format("NextState : ~p HandlerState2 : ~p RemainingData : ~p~n",[NextState, HandlerState2, RemainingData]),
+			%% FIXME 
+			%io:format("NextState : ~p HandlerState2 : ~p RemainingData : ~p~n",[NextState, HandlerState2, RemainingData]),
 			NextState(State, Req2, HandlerState2, RemainingData);
 		{ok, Req2, HandlerState2, hibernate} ->
-			%% FIXME io:format("hibernate NextState : ~p HandlerState2 : ~p RemainingData : ~p~n",[NextState, HandlerState2, RemainingData]),
+			%% FIXME 
+			%io:format("hibernate NextState : ~p HandlerState2 : ~p RemainingData : ~p~n",[NextState, HandlerState2, RemainingData]),
 			NextState(State#state{hibernate=true},
 				Req2, HandlerState2, RemainingData);
+
 		{reply, Payload, Req2, HandlerState2}
 				when is_list(Payload) ->
 			case websocket_send_many(Payload, State) of
